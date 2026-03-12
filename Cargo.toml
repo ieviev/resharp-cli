@@ -1,0 +1,33 @@
+[package]
+name = "resharp-grep"
+version = "0.1.0"
+edition = "2021"
+description = "a grep-like grep tool powered by the resharp regex engine"
+license = "MIT"
+authors = ["Ian Erik Varatalu"]
+repository = "https://github.com/ieviev/resharp-cli"
+homepage = "https://github.com/ieviev/resharp-cli"
+keywords = ["grep", "regex", "search", "cli", "intersection"]
+categories = ["command-line-utilities", "text-processing"]
+rust-version = "1.70"
+
+[[bin]]
+name = "resharp"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+bstr = "1"
+clap = { version = "4", features = ["derive"] }
+clap_complete = "4"
+ignore = "0.4"
+memchr = "2"
+memmap2 = "0.9"
+regex-syntax = "0.8"
+resharp = "0.3"
+termcolor = "1"
+
+[profile.release]
+lto = true
+codegen-units = 1
+opt-level = 3
