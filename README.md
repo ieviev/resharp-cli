@@ -94,17 +94,7 @@ cargo install resharp-grep  # binary is named `resharp`
 
 ### Prebuilt binaries
 
-download from [GitHub releases](https://github.com/ieviev/resharp-cli/releases):
-
-- `resharp-x86_64-linux` (x86_64 linux)
-- `resharp-aarch64-linux` (aarch64 linux)
-- `resharp-aarch64-macos` (aarch64 macos)
-- `resharp-x86_64-windows.exe` (x86_64 windows)
-
-```sh
-chmod +x resharp-x86_64-linux
-cp resharp-x86_64-linux ~/.local/bin/resharp
-```
+download from [GitHub releases](https://github.com/ieviev/resharp-cli/releases).
 
 ### Nix
 
