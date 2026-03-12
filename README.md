@@ -108,7 +108,7 @@ or in a flake:
 inputs.resharp.url = "github:ieviev/resharp-cli";
 ```
 
-the nix package also installs a `re#` symlink and shell completions.
+nix package includes both `resharp` and `re#`, plus shell completions.
 
 ## License
 
