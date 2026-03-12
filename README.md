@@ -5,7 +5,7 @@ a grep that can search for multiple words at once and across paragraphs, powered
 [install](#install) | [web playground](https://ieviev.github.io/resharp-webapp/)
 
 > `re#` is a valid binary name on unix - `#` only starts a comment after whitespace.
-> also available as `resharp` for compatibility.
+> also included as `resharp` for compatibility.
 
 ## Quickstart
 
