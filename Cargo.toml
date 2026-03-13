@@ -25,6 +25,8 @@ memchr = "2"
 memmap2 = "0.9"
 regex-syntax = "0.8"
 resharp = "0.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 termcolor = "1"
 
 [profile.release]

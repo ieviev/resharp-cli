@@ -14,7 +14,10 @@ use clap::Parser;
   re# -W error -W timeout src/          lines with both words
   re# -W error --not debug .            \"error\" without \"debug\"
   re# -p error -p timeout -t rust       paragraphs with both words
-  re# '(_*error_*)&~(_*debug_*)'        regex algebra",
+  re# '(_*error_*)&~(_*debug_*)'        regex algebra
+  re# --scope file -W serde -W async -l src/  files with both words
+  re# --json 'TODO' src/               JSON output for agents
+  re# -P 5 -W unsafe -W unwrap src/    proximity search",
     after_help = "resharp supports intersection (&), complement (~(...)), and universal wildcard (_).
 see https://github.com/ieviev/resharp for the regex engine."
 )]
@@ -221,7 +224,6 @@ pub struct Args {
     #[arg(long = "no-mmap")]
     pub no_mmap: bool,
 
-
     /// max DFA state capacity (default: 65535)
     #[arg(long = "dfa-capacity", value_name = "NUM", default_value = "65535")]
     pub dfa_capacity: usize,
@@ -233,11 +235,51 @@ pub struct Args {
     /// generate shell completions (bash, zsh, fish, elvish, powershell)
     #[arg(long = "completions", value_name = "SHELL", hide = true)]
     pub completions: Option<clap_complete::Shell>,
+
+    /// scope for intersection (line, paragraph, file, or a boundary regex)
+    #[arg(long = "scope", value_name = "SCOPE")]
+    pub scope: Option<String>,
+
+    /// find patterns within N lines of each other (use with -W or --and)
+    #[arg(short = 'P', long = "near", value_name = "NUM")]
+    pub near: Option<usize>,
+
+    /// stop after NUM total matches across all files
+    #[arg(long = "max-total", value_name = "NUM")]
+    pub max_total: Option<usize>,
+
+    /// deduplicate matched strings (useful with -o)
+    #[arg(long = "unique")]
+    pub unique: bool,
+
+    /// output results as JSON (one object per match line)
+    #[arg(long = "json")]
+    pub json: bool,
+
+    /// delimiters for block scope (e.g., "{}")
+    #[arg(long = "delimiters", value_name = "PAIR")]
+    pub delimiters: Option<String>,
+
+    /// show enclosing scope (function/block signature) for each match
+    #[arg(long = "show-scope")]
+    pub show_scope: bool,
 }
 
 impl Args {
     pub fn is_paragraph_mode(&self) -> bool {
         self.paragraphs.is_some()
+    }
+
+    pub fn effective_scope(&self) -> &str {
+        if let Some(ref scope) = self.scope {
+            scope.as_str()
+        } else if self.is_paragraph_mode() {
+            "paragraph"
+        } else if self.multiline || self.near.is_some() {
+            "multiline"
+        } else {
+            "line"
+        }
     }
 
     /// collect all "contains" words from -p and -W
@@ -254,13 +296,14 @@ impl Args {
 
     /// resolve the final regex pattern from positional, -e, -f, -W, and -p flags
     pub fn resolve_pattern(&self) -> anyhow::Result<String> {
-
-
         let words = self.contains_words();
 
         if !words.is_empty() {
             if !self.regexp.is_empty() || !self.pattern_file.is_empty() {
                 anyhow::bail!("-e/-f cannot be combined with -W/-p word patterns");
+            }
+            if self.near.is_some() && words.len() + self.and.len() < 2 {
+                anyhow::bail!("--near requires at least 2 terms (use -W, --and, or & in pattern)");
             }
             return Ok(self.build_words_pattern(&words));
         }
@@ -307,39 +350,15 @@ impl Args {
         };
 
         // apply --and / --not intersection/complement
-        let has_and = !self.and.is_empty();
-        let has_not = !self.not.is_empty();
-        if has_and || has_not {
-            if self.is_paragraph_mode() {
-                combined = format!("(_*{combined}_*)");
-                for a in &self.and {
-                    let term = self.wrap_pattern(a.clone());
-                    combined = format!("{combined}&(_*{term}_*)");
-                }
-                for n in &self.not {
-                    let term = self.wrap_pattern(n.clone());
-                    combined = format!("{combined}&~(_*{term}_*)");
-                }
-            } else {
-                combined = format!("(.*{combined}.*)");
-                for a in &self.and {
-                    let term = self.wrap_pattern(a.clone());
-                    combined = format!("{combined}&(.*{term}.*)");
-                }
-                for n in &self.not {
-                    let term = self.wrap_pattern(n.clone());
-                    combined = format!("{combined}&~(.*{term}.*)");
-                }
-                combined = format!("^({combined})$");
-            }
+        combined = self.apply_and_not(combined);
+
+        // --near requires at least 2 terms
+        if self.near.is_some() && self.and.is_empty() {
+            anyhow::bail!("--near requires at least 2 terms (use -W, --and, or & in pattern)");
         }
 
-        // apply boundary constraint
-        if self.is_paragraph_mode() {
-            combined = format!("({combined})&((?<=\\A|\n\n)(_*&~(_*\n\n_*)&~(\n_*|_*\n))(?=\n\n|\n\\z|\\z))");
-        } else if !self.multiline {
-            combined = format!("({combined})&(.*)");
-        }
+        // apply scope boundary
+        combined = self.apply_scope_boundary(combined);
 
         Ok(combined)
     }
@@ -364,30 +383,72 @@ impl Args {
 
         // --not: complement within scope
         if !self.not.is_empty() {
-            if self.is_paragraph_mode() {
-                for n in &self.not {
-                    let term = self.wrap_pattern(n.clone());
-                    combined = format!("{combined}&~(_*{term}_*)");
-                }
-            } else {
+            if self.effective_scope() == "line" {
                 for n in &self.not {
                     let term = self.wrap_pattern(n.clone());
                     combined = format!("{combined}&~(.*{term}.*)");
                 }
                 combined = format!("^({combined})$");
+            } else {
+                for n in &self.not {
+                    let term = self.wrap_pattern(n.clone());
+                    combined = format!("{combined}&~(_*{term}_*)");
+                }
             }
         }
 
-        // apply scope boundary
-        if self.is_paragraph_mode() {
-            format!("({combined})&((?<=\\A|\n\n)(_*&~(_*\n\n_*)&~(\n_*|_*\n))(?=\n\n|\n\\z|\\z))")
-        } else if !self.multiline {
-            format!("({combined})&(.*)")
-        } else {
-            combined
-        }
+        self.apply_scope_boundary(combined)
     }
 
+    fn apply_and_not(&self, mut combined: String) -> String {
+        let has_and = !self.and.is_empty();
+        let has_not = !self.not.is_empty();
+        if !has_and && !has_not {
+            return combined;
+        }
+
+        if self.effective_scope() == "line" {
+            combined = format!("(.*{combined}.*)");
+            for a in &self.and {
+                let term = self.wrap_pattern(a.clone());
+                combined = format!("{combined}&(.*{term}.*)");
+            }
+            for n in &self.not {
+                let term = self.wrap_pattern(n.clone());
+                combined = format!("{combined}&~(.*{term}.*)");
+            }
+            combined = format!("^({combined})$");
+        } else {
+            combined = format!("(_*{combined}_*)");
+            for a in &self.and {
+                let term = self.wrap_pattern(a.clone());
+                combined = format!("{combined}&(_*{term}_*)");
+            }
+            for n in &self.not {
+                let term = self.wrap_pattern(n.clone());
+                combined = format!("{combined}&~(_*{term}_*)");
+            }
+        }
+
+        combined
+    }
+
+    fn apply_scope_boundary(&self, combined: String) -> String {
+        let scoped = match self.effective_scope() {
+            "line" => format!("({combined})&(.*)"),
+            "paragraph" => format!("({combined})&((?<=\\A|\n\n)(_*&~(_*\n\n_*)&~(\n_*|_*\n))(?=\n\n|\n\\z|\\z))"),
+            "file" | "multiline" => combined,
+            custom => format!("({combined})&({custom})"),
+        };
+        self.apply_near(scoped)
+    }
+
+    fn apply_near(&self, combined: String) -> String {
+        match self.near {
+            Some(n) => format!("({combined})&~((_*\n_*){{{}}})", n + 1),
+            None => combined,
+        }
+    }
 
     fn wrap_pattern(&self, mut pattern: String) -> String {
         if self.fixed_strings {
@@ -447,6 +508,9 @@ impl Args {
     }
 
     pub fn color_choice(&self) -> termcolor::ColorChoice {
+        if self.json {
+            return termcolor::ColorChoice::Never;
+        }
         match self.color.as_str() {
             "always" => termcolor::ColorChoice::Always,
             "never" => termcolor::ColorChoice::Never,
@@ -480,12 +544,14 @@ impl Args {
     }
 
     pub fn show_heading(&self) -> bool {
+        if self.json {
+            return false;
+        }
         if self.no_heading {
             return false;
         }
         self.heading || std::io::stdout().is_terminal()
     }
-
 
     pub fn after_ctx(&self) -> usize {
         self.after_context.or(self.context).unwrap_or(0)
@@ -503,7 +569,6 @@ impl Args {
         if self.mmap {
             return true;
         }
-        // auto: mmap files >= 1MB
         file_size >= 1024 * 1024
     }
 
@@ -539,6 +604,11 @@ pub fn parse() -> anyhow::Result<Args> {
     {
         let pat = args.pattern.take().unwrap();
         args.paths.insert(0, PathBuf::from(pat));
+    }
+
+    // --scope paragraph is equivalent to -p (without words)
+    if args.scope.as_deref() == Some("paragraph") && args.paragraphs.is_none() {
+        args.paragraphs = Some(Vec::new());
     }
 
     Ok(args)

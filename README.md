@@ -1,6 +1,6 @@
 # re#
 
-a grep that can search for multiple words at once and across paragraphs, powered by the [RE# regex engine](https://github.com/ieviev/resharp).
+a grep that can search for multiple words at once, powered by [RE#](https://github.com/ieviev/resharp).
 
 [install](#install) | [web playground](https://ieviev.github.io/resharp-webapp/)
 
@@ -32,6 +32,24 @@ re# -W error --not debug src/         # "error" without "debug"
 re# -W error -W warn --not debug .    # "error" and "warn", but not "debug"
 ```
 
+### Proximity search
+
+`-P N` / `--near N` constrains matches so all terms appear within N lines of each other:
+
+```sh
+re# -P 5 -W unsafe -W unwrap src/    # "unsafe" and "unwrap" within 5 lines
+re# -P 3 -W TODO -W FIXME .          # nearby TODOs and FIXMEs
+re# -P 10 -W fn -W unsafe -t rust    # functions near unsafe blocks
+```
+
+`--near` composes with other flags:
+
+```sh
+re# -P 5 -W unsafe -W unwrap --not allow -t rust   # with --not
+re# -P 5 -W unsafe -W unwrap -c src/               # count matches
+re# -P 5 -W unsafe -W unwrap --json src/            # JSON output
+```
+
 ### Paragraph search
 
 `-p` searches paragraphs (blocks separated by blank lines) instead of lines:
@@ -40,6 +58,22 @@ re# -W error -W warn --not debug .    # "error" and "warn", but not "debug"
 re# -p error -p timeout               # paragraphs containing both words
 re# -p error -p timeout -t rust       # only in rust files
 re# -i -p error -p timeout            # case insensitive
+```
+
+### Scoped search
+
+`--scope` controls the match boundary. the default is `line`.
+
+| scope | flag | matches within |
+|-------|------|----------------|
+| line | (default) | single lines |
+| paragraph | `-p` / `--scope paragraph` | blocks separated by blank lines |
+| file | `--scope file` | entire files |
+| custom | `--scope '<regex>'` | any regex constraint |
+
+```sh
+re# --scope file -W serde -W async -l src/  # files containing both words
+re# --scope '(_*\n){0,3}' -W error -W warn src/  # custom: within 3 lines
 ```
 
 ### Pattern operators
@@ -60,6 +94,22 @@ re# '~(_*debug_*)' src/
 ```
 
 try patterns interactively in the [web playground](https://ieviev.github.io/resharp-webapp/).
+
+### How it works
+
+every constraint is just a regex intersection. when you write:
+
+```sh
+re# -P 5 -W unsafe -W unwrap
+```
+
+re# builds the pattern:
+
+```
+(_*unsafe_*) & (_*unwrap_*) & ~((_*\n_*){6})
+```
+
+`-W` terms become intersections (`_*word_*`), `--near 5` rejects spans with 6+ newlines via complement (`~`), and scopes like `-p` or `--scope` add their own boundary constraint. everything composes through the same mechanism, so all features (highlighting, context, `--count`, `--json`, etc.) work uniformly.
 
 ### `_` wildcard
 

@@ -1,5 +1,5 @@
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use ignore::overrides::OverrideBuilder;
@@ -8,7 +8,7 @@ use ignore::WalkBuilder;
 use termcolor::BufferWriter;
 
 use crate::args::Args;
-use crate::printer::PrinterOpts;
+use crate::printer::{self, PrinterOpts};
 use crate::search;
 
 pub fn print_type_list() {
@@ -34,6 +34,12 @@ pub fn walk_and_search(
 
     if args.sort.as_deref() == Some("path") {
         return walk_sorted(re, args, paths, printer_opts, color_choice, max_filesize);
+    }
+
+    // force sequential for --unique (needs shared dedup state)
+    if args.unique {
+        let walker = build_walker(args, paths, 1)?;
+        return walk_sequential(walker, re, args, printer_opts, color_choice, max_filesize);
     }
 
     let threads = args.threads.unwrap_or(0);
@@ -116,6 +122,8 @@ fn walk_sequential(
 ) -> anyhow::Result<(bool, bool)> {
     let mut found_any = false;
     let mut had_errors = false;
+    let mut total_matches = 0usize;
+    let mut unique_set = if args.unique { Some(printer::UniqueSet::new()) } else { None };
 
     for entry in walker.build() {
         let entry = match entry {
@@ -136,8 +144,13 @@ fn walk_sequential(
             }
         }
 
-        let (found, had_error) =
-            search::search_file(re, entry.path(), args, printer_opts, color_choice)?;
+        let effective_max = compute_effective_max(args, total_matches);
+
+        let (found, had_error, count) =
+            search::search_file(
+                re, entry.path(), args, printer_opts, color_choice,
+                effective_max, unique_set.as_mut(),
+            )?;
 
         if had_error {
             had_errors = true;
@@ -147,6 +160,11 @@ fn walk_sequential(
             if args.quiet {
                 return Ok((true, had_errors));
             }
+        }
+
+        total_matches += count;
+        if args.max_total.map_or(false, |mt| total_matches >= mt) {
+            break;
         }
     }
 
@@ -164,7 +182,9 @@ fn walk_parallel(
     let bufwtr = Arc::new(BufferWriter::stdout(color_choice));
     let found_any = Arc::new(AtomicBool::new(false));
     let had_errors = Arc::new(AtomicBool::new(false));
+    let total_matches = Arc::new(AtomicUsize::new(0));
     let quiet = args.quiet;
+    let max_total = args.max_total;
     let pattern = pattern.to_string();
     let dfa_threshold = args.dfa_threshold;
     let dfa_capacity = args.dfa_capacity;
@@ -172,6 +192,7 @@ fn walk_parallel(
     walker.build_parallel().run(|| {
         let found_any = Arc::clone(&found_any);
         let had_errors = Arc::clone(&had_errors);
+        let total_matches = Arc::clone(&total_matches);
         let bufwtr = Arc::clone(&bufwtr);
         let re = match resharp::Regex::with_options(&pattern, resharp::EngineOptions {
             dfa_threshold,
@@ -187,6 +208,12 @@ fn walk_parallel(
         Box::new(move |entry| {
             if quiet && found_any.load(Ordering::Relaxed) {
                 return ignore::WalkState::Quit;
+            }
+
+            if let Some(mt) = max_total {
+                if total_matches.load(Ordering::Relaxed) >= mt {
+                    return ignore::WalkState::Quit;
+                }
             }
 
             let entry = match entry {
@@ -207,15 +234,21 @@ fn walk_parallel(
                 }
             }
 
+            let effective_max = max_total.map(|mt| {
+                let current = total_matches.load(Ordering::Relaxed);
+                mt.saturating_sub(current)
+            });
+
             let mut buf = bufwtr.buffer();
-            match search::search_file_to_writer(&re, entry.path(), args, printer_opts, &mut buf) {
-                Ok((found, had_error)) => {
+            match search::search_file_to_writer(&re, entry.path(), args, printer_opts, &mut buf, effective_max) {
+                Ok((found, had_error, count)) => {
                     if had_error {
                         had_errors.store(true, Ordering::Relaxed);
                     }
                     if found {
                         found_any.store(true, Ordering::Relaxed);
                     }
+                    total_matches.fetch_add(count, Ordering::Relaxed);
                     if !buf.as_slice().is_empty() {
                         let _ = bufwtr.print(&buf);
                     }
@@ -269,8 +302,16 @@ fn walk_sorted(
 
     let mut found_any = false;
     let mut had_errors = false;
+    let mut total_matches = 0usize;
+    let mut unique_set = if args.unique { Some(printer::UniqueSet::new()) } else { None };
+
     for path in &entries {
-        let (found, had_error) = search::search_file(re, path, args, printer_opts, color_choice)?;
+        let effective_max = compute_effective_max(args, total_matches);
+
+        let (found, had_error, count) = search::search_file(
+            re, path, args, printer_opts, color_choice,
+            effective_max, unique_set.as_mut(),
+        )?;
         if had_error {
             had_errors = true;
         }
@@ -280,7 +321,21 @@ fn walk_sorted(
                 return Ok((true, had_errors));
             }
         }
+
+        total_matches += count;
+        if args.max_total.map_or(false, |mt| total_matches >= mt) {
+            break;
+        }
     }
 
     Ok((found_any, had_errors))
+}
+
+fn compute_effective_max(args: &Args, total_so_far: usize) -> Option<usize> {
+    match (args.max_count, args.max_total) {
+        (Some(mc), Some(mt)) => Some(mc.min(mt.saturating_sub(total_so_far))),
+        (Some(mc), None) => Some(mc),
+        (None, Some(mt)) => Some(mt.saturating_sub(total_so_far)),
+        (None, None) => None,
+    }
 }

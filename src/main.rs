@@ -41,17 +41,25 @@ fn run() -> anyhow::Result<(bool, bool)> {
         return Ok((true, false));
     }
 
-    let pattern = args.resolve_pattern()?;
+    if args.scope.as_deref() == Some("block") {
+        anyhow::bail!("--scope block requires --delimiters (not yet implemented)");
+    }
+    if args.scope.as_deref() == Some("indent") {
+        anyhow::bail!("--scope indent is not yet implemented");
+    }
+
     let engine_opts = resharp::EngineOptions {
         dfa_threshold: args.dfa_threshold,
         max_dfa_capacity: args.dfa_capacity,
         ..Default::default()
     };
-    let re = resharp::Regex::with_options(&pattern, engine_opts)
-        .map_err(|e| anyhow::anyhow!("{e}"))?;
 
     let color_choice = args.color_choice();
     let printer_opts = printer::PrinterOpts::from_args(&args);
+
+    let pattern = args.resolve_pattern()?;
+    let re = resharp::Regex::with_options(&pattern, engine_opts)
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
 
     if args.paths.is_empty() && !std::io::stdin().is_terminal() {
         let found = search::search_stdin(&re, &args, &printer_opts, color_choice)?;

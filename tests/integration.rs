@@ -69,7 +69,6 @@ fn run_args(args: &[&str]) -> (String, i32) {
     (stdout, code)
 }
 
-// ===== basic search =====
 
 #[test]
 fn stdin_match() {
@@ -125,7 +124,6 @@ fn empty_input() {
     assert_eq!(code, 1);
 }
 
-// ===== case sensitivity =====
 
 #[test]
 fn case_insensitive() {
@@ -151,7 +149,6 @@ fn smart_case_upper() {
     assert_eq!(out, "2:Hello World");
 }
 
-// ===== match control =====
 
 #[test]
 fn invert_match() {
@@ -177,7 +174,6 @@ fn max_count() {
     assert_eq!(out, "1:apple pie");
 }
 
-// ===== output modes =====
 
 #[test]
 fn count() {
@@ -223,7 +219,6 @@ fn files_without_match() {
     assert_eq!(out, f2.to_str().unwrap());
 }
 
-// ===== context lines =====
 
 #[test]
 fn after_context() {
@@ -249,7 +244,6 @@ fn context_separator() {
     assert_eq!(out, "1:apple pie\n2-banana split\n--\n4-cherry tart\n5:grape juice");
 }
 
-// ===== multiple patterns =====
 
 #[test]
 fn multiple_patterns_e() {
@@ -278,7 +272,6 @@ fn e_with_file_path() {
     assert!(!out.contains("banana"));
 }
 
-// ===== fixed strings =====
 
 #[test]
 fn fixed_strings() {
@@ -286,7 +279,6 @@ fn fixed_strings() {
     assert_eq!(out, "1:foo.bar");
 }
 
-// ===== resharp algebra =====
 
 #[test]
 fn wildcard_underscore() {
@@ -306,7 +298,6 @@ fn intersection_both() {
     assert_eq!(out, "3:the cat and dog");
 }
 
-// ===== lookarounds =====
 
 #[test]
 fn lookahead_positive() {
@@ -327,7 +318,6 @@ fn lookahead_with_intersection() {
     assert_eq!(out, "1:hello world");
 }
 
-// ===== paragraph mode =====
 
 #[test]
 fn paragraphs_blocks_cross_para() {
@@ -345,7 +335,6 @@ fn paragraphs_within_para() {
     assert_eq!(lines, vec!["1:first paragraph about", "2:cats and dogs together"]);
 }
 
-// ===== paragraph word mode (-p word1 -p word2 ...) =====
 
 #[test]
 fn paragraphs_words_match() {
@@ -412,7 +401,6 @@ fn paragraphs_flag_with_not() {
     assert!(!out.contains("dogs"));
 }
 
-// ===== directory walking =====
 
 #[test]
 fn type_filter() {
@@ -481,7 +469,6 @@ fn sort_path() {
     assert!(lines[2].ends_with("deep.rs"));
 }
 
-// ===== exit codes =====
 
 #[test]
 fn exit_0_match() {
@@ -514,7 +501,6 @@ fn exit_2_no_file() {
 }
 
 
-// ===== mmap =====
 
 /// generate a large file with known content; resharp scans in reverse so
 /// place matches at the start, middle, and end to exercise boundary conditions
@@ -670,7 +656,6 @@ fn mmap_context_lines() {
     assert!(lines[2].contains("filler"));
 }
 
-// ===== quiet mode =====
 
 #[test]
 fn quiet_no_output() {
@@ -743,4 +728,187 @@ fn find_all_no_trailing_newline_large_intersection() {
         matches_nl.len(),
         matches_no_nl.len(),
     );
+}
+
+
+#[test]
+fn scope_line_default() {
+    // default scope is line, same as always
+    let (out, _) = run_stdin(&["-W", "cat", "-W", "dog"], "the cat and dog\ncat only\ndog only\n");
+    assert_eq!(out, "1:the cat and dog");
+}
+
+#[test]
+fn scope_paragraph() {
+    let input = "cats and\ndogs together\n\nfish only\n";
+    let (out, code) = run_stdin(&["--scope", "paragraph", "-W", "cats", "-W", "dogs"], input);
+    assert_eq!(code, 0);
+    assert!(out.contains("cats and"));
+    assert!(out.contains("dogs together"));
+    assert!(!out.contains("fish"));
+}
+
+#[test]
+fn scope_file() {
+    let td = TestDir::new();
+    let f1 = td.write("both.rs", "use serde;\nasync fn foo() {}\n");
+    let f2 = td.write("only_serde.rs", "use serde;\nfn bar() {}\n");
+    let (out, _) = run_args(&[
+        "--scope", "file", "-l", "--no-heading", "--color", "never",
+        "-W", "serde", "-W", "async",
+        f1.to_str().unwrap(), f2.to_str().unwrap(),
+    ]);
+    assert!(out.contains("both.rs"));
+    assert!(!out.contains("only_serde.rs"));
+}
+
+#[test]
+fn scope_custom_boundary() {
+    // custom scope: no double-newline crossings (paragraph-like)
+    let input = "error here\ntimeout here\n\nerror only\n";
+    let (out, code) = run_stdin(
+        &["--scope", "~(_*\n\n_*)", "(_*error_*)&(_*timeout_*)"],
+        input,
+    );
+    assert_eq!(code, 0);
+    assert!(out.contains("error here"));
+    assert!(out.contains("timeout here"));
+}
+
+#[test]
+fn scope_custom_no_cross() {
+    // should not match across boundary
+    let input = "error here\n\ntimeout here\n";
+    let (out, code) = run_stdin(
+        &["--scope", "~(_*\n\n_*)", "(_*error_*)&(_*timeout_*)"],
+        input,
+    );
+    assert_eq!(out, "");
+    assert_eq!(code, 1);
+}
+
+
+#[test]
+fn json_basic() {
+    let (out, _) = run_stdin(&["--json", "apple"], "apple pie\nbanana\napple sauce\n");
+    let lines: Vec<&str> = out.lines().collect();
+    assert_eq!(lines.len(), 2);
+    let v: serde_json::Value = serde_json::from_str(lines[0]).unwrap();
+    assert_eq!(v["line_number"], 1);
+    assert_eq!(v["submatches"][0]["match"], "apple");
+}
+
+#[test]
+fn json_with_path() {
+    let td = TestDir::new();
+    let f = td.write("test.txt", "hello world\n");
+    let (out, _) = run_args(&["--json", "hello", f.to_str().unwrap()]);
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert!(v["path"].as_str().unwrap().contains("test.txt"));
+    assert_eq!(v["line_number"], 1);
+}
+
+#[test]
+fn json_files_with_matches() {
+    let td = TestDir::new();
+    let f = td.write("test.txt", "hello world\n");
+    let (out, _) = run_args(&["--json", "-l", "hello", f.to_str().unwrap()]);
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(v["type"], "file");
+    assert!(v["path"].as_str().unwrap().contains("test.txt"));
+}
+
+#[test]
+fn json_count() {
+    let (out, _) = run_stdin(&["--json", "-c", "apple"], "apple pie\nbanana\napple sauce\n");
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(v["type"], "count");
+    assert_eq!(v["count"], 2);
+}
+
+#[test]
+fn json_show_scope() {
+    let input = "fn main() {\n    unwrap()\n}\n";
+    let (out, _) = run_stdin(&["--json", "--show-scope", "unwrap"], input);
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(v["scope"], "fn main() {");
+}
+
+
+#[test]
+fn near_basic() {
+    let input = "unsafe {\n  foo();\n  bar.unwrap();\n}\nsafe_fn() {\n  baz();\n}\n";
+    let (out, code) = run_stdin(&["-P", "3", "-W", "unsafe", "-W", "unwrap"], input);
+    assert_eq!(code, 0);
+    assert!(out.contains("unsafe"));
+    assert!(out.contains("unwrap"));
+}
+
+#[test]
+fn near_too_far() {
+    let input = "unsafe {\n  a;\n  b;\n  c;\n  d;\n  e;\n  f.unwrap();\n}\n";
+    let (out, code) = run_stdin(&["-P", "2", "-W", "unsafe", "-W", "unwrap"], input);
+    // unsafe is on line 1, unwrap on line 7 - distance 6 > near 2
+    assert_eq!(code, 1);
+    assert_eq!(out, "");
+}
+
+#[test]
+fn near_within_range() {
+    let input = "unsafe {\n  f.unwrap();\n}\n";
+    let (out, code) = run_stdin(&["-P", "2", "-W", "unsafe", "-W", "unwrap"], input);
+    assert_eq!(code, 0);
+    assert!(out.contains("unsafe"));
+    assert!(out.contains("unwrap"));
+}
+
+
+#[test]
+fn max_total_stdin() {
+    let (out, _) = run_stdin(&["--max-total", "2", "apple"], "apple 1\napple 2\napple 3\napple 4\n");
+    let lines: Vec<&str> = out.lines().collect();
+    assert_eq!(lines.len(), 2);
+}
+
+#[test]
+fn max_total_files() {
+    let td = TestDir::new();
+    td.write("a.txt", "match 1\nmatch 2\nmatch 3\n");
+    td.write("b.txt", "match 4\nmatch 5\n");
+    let (out, _) = run_args(&[
+        "--max-total", "3", "--sort", "path", "--no-heading", "--no-line-number", "--color", "never",
+        "match", td.path().to_str().unwrap(),
+    ]);
+    let lines: Vec<&str> = out.lines().collect();
+    assert_eq!(lines.len(), 3);
+}
+
+
+#[test]
+fn unique_only_matching() {
+    let (out, _) = run_stdin(
+        &["-o", "--unique", "apple|banana"],
+        "apple pie\nbanana split\napple sauce\nbanana cream\napple tart\n",
+    );
+    let lines: Vec<&str> = out.lines().collect();
+    assert_eq!(lines.len(), 2); // apple + banana, deduplicated
+}
+
+#[test]
+fn unique_full_lines() {
+    let (out, _) = run_stdin(
+        &["--unique", "dup"],
+        "dup line\nother\ndup line\ndup line\n",
+    );
+    let lines: Vec<&str> = out.lines().collect();
+    assert_eq!(lines.len(), 1); // only one "dup line"
+}
+
+
+#[test]
+fn show_scope_function() {
+    let input = "fn outer() {\n    let x = val.unwrap();\n}\n";
+    let (out, _) = run_stdin(&["--show-scope", "-n", "unwrap"], input);
+    assert!(out.contains("fn outer()"));
+    assert!(out.contains("unwrap"));
 }

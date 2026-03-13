@@ -50,6 +50,7 @@ pub fn search_buffer(
     re: &resharp::Regex,
     buf: &[u8],
     args: &Args,
+    effective_max: Option<usize>,
 ) -> SearchResult {
     if buf.is_empty() {
         return SearchResult {
@@ -137,7 +138,8 @@ pub fn search_buffer(
         };
     }
 
-    if let Some(max) = args.max_count {
+    let max = effective_max.or(args.max_count);
+    if let Some(max) = max {
         line_matches.truncate(max);
     }
 
@@ -146,7 +148,6 @@ pub fn search_buffer(
         had_error: false,
     }
 }
-
 
 /// read file contents, using mmap for large files
 fn read_file(path: &Path, args: &Args) -> anyhow::Result<FileData> {
@@ -194,31 +195,35 @@ pub fn search_file(
     args: &Args,
     printer_opts: &PrinterOpts,
     color_choice: termcolor::ColorChoice,
-) -> anyhow::Result<(bool, bool)> {
+    effective_max: Option<usize>,
+    unique_set: Option<&mut printer::UniqueSet>,
+) -> anyhow::Result<(bool, bool, usize)> {
     let data = read_file(path, args)?;
     let buf = data.as_ref();
 
     if !args.search_binary() && is_binary(buf) {
-        return Ok((false, false));
+        return Ok((false, false, 0));
     }
 
-    let result = search_buffer(re, buf, args);
+    let result = search_buffer(re, buf, args, effective_max);
 
     if result.had_error {
         eprintln!("resharp: {}: DFA capacity exceeded, skipping", path.display());
-        return Ok((false, true));
+        return Ok((false, true, 0));
     }
 
-    let found = !result.matches.is_empty();
+    let match_count = result.matches.len();
+    let found = match_count > 0;
 
     if args.quiet {
-        return Ok((found, false));
+        return Ok((found, false, match_count));
     }
 
     let path_str = Some(path.to_string_lossy().into_owned());
-    printer::print_results(buf, &result.matches, path_str.as_deref(), printer_opts, color_choice)?;
+    let mut out = termcolor::StandardStream::stdout(color_choice);
+    printer::write_results_with_unique(&mut out, buf, &result.matches, path_str.as_deref(), printer_opts, unique_set)?;
 
-    Ok((found, false))
+    Ok((found, false, match_count))
 }
 
 /// search a file, write results to a WriteColor buffer
@@ -228,31 +233,33 @@ pub fn search_file_to_writer(
     args: &Args,
     printer_opts: &PrinterOpts,
     out: &mut dyn termcolor::WriteColor,
-) -> anyhow::Result<(bool, bool)> {
+    effective_max: Option<usize>,
+) -> anyhow::Result<(bool, bool, usize)> {
     let data = read_file(path, args)?;
     let buf = data.as_ref();
 
     if !args.search_binary() && is_binary(buf) {
-        return Ok((false, false));
+        return Ok((false, false, 0));
     }
 
-    let result = search_buffer(re, buf, args);
+    let result = search_buffer(re, buf, args, effective_max);
 
     if result.had_error {
         eprintln!("resharp: {}: DFA capacity exceeded, skipping", path.display());
-        return Ok((false, true));
+        return Ok((false, true, 0));
     }
 
-    let found = !result.matches.is_empty();
+    let match_count = result.matches.len();
+    let found = match_count > 0;
 
     if args.quiet {
-        return Ok((found, false));
+        return Ok((found, false, match_count));
     }
 
     let path_str = Some(path.to_string_lossy().into_owned());
     printer::write_results(out, buf, &result.matches, path_str.as_deref(), printer_opts)?;
 
-    Ok((found, false))
+    Ok((found, false, match_count))
 }
 
 /// search stdin
@@ -265,7 +272,12 @@ pub fn search_stdin(
     let mut buf = Vec::new();
     std::io::stdin().read_to_end(&mut buf)?;
 
-    let result = search_buffer(re, &buf, args);
+    let effective_max = match (args.max_count, args.max_total) {
+        (Some(mc), Some(mt)) => Some(mc.min(mt)),
+        (Some(mc), None) => Some(mc),
+        (None, mt) => mt,
+    };
+    let result = search_buffer(re, &buf, args, effective_max);
 
     if result.had_error {
         anyhow::bail!("DFA capacity exceeded");
@@ -279,3 +291,4 @@ pub fn search_stdin(
 
     Ok(found)
 }
+
