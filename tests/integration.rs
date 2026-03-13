@@ -764,10 +764,10 @@ fn scope_file() {
 
 #[test]
 fn scope_custom_boundary() {
-    // custom scope: no double-newline crossings (paragraph-like)
+    // custom scope: boundary is \n\n, match must not cross it
     let input = "error here\ntimeout here\n\nerror only\n";
     let (out, code) = run_stdin(
-        &["--scope", "~(_*\n\n_*)", "(_*error_*)&(_*timeout_*)"],
+        &["--scope", "\n\n", "(_*error_*)&(_*timeout_*)"],
         input,
     );
     assert_eq!(code, 0);
@@ -780,7 +780,7 @@ fn scope_custom_no_cross() {
     // should not match across boundary
     let input = "error here\n\ntimeout here\n";
     let (out, code) = run_stdin(
-        &["--scope", "~(_*\n\n_*)", "(_*error_*)&(_*timeout_*)"],
+        &["--scope", "\n\n", "(_*error_*)&(_*timeout_*)"],
         input,
     );
     assert_eq!(out, "");
@@ -911,4 +911,68 @@ fn show_scope_function() {
     let (out, _) = run_stdin(&["--show-scope", "-n", "unwrap"], input);
     assert!(out.contains("fn outer()"));
     assert!(out.contains("unwrap"));
+}
+
+
+#[test]
+fn fixed_strings_underscore() {
+    let (out, _) = run_stdin(&["-F", "a_b"], "a_b\naxb\nabc\n");
+    assert_eq!(out, "1:a_b");
+}
+
+#[test]
+fn fixed_strings_ampersand() {
+    let (out, _) = run_stdin(&["-F", "a&b"], "a&b\nabc\n");
+    assert_eq!(out, "1:a&b");
+}
+
+#[test]
+fn fixed_strings_tilde() {
+    let (out, _) = run_stdin(&["-F", "a~b"], "a~b\nabc\n");
+    assert_eq!(out, "1:a~b");
+}
+
+#[test]
+fn fixed_strings_all_meta() {
+    let (out, _) = run_stdin(&["-F", "_&~"], "_&~\nabc\n");
+    assert_eq!(out, "1:_&~");
+}
+
+#[test]
+fn fixed_strings_dot_and_underscore() {
+    let (out, _) = run_stdin(&["-F", "foo._bar"], "foo._bar\nfooXYbar\nfoo.Xbar\n");
+    assert_eq!(out, "1:foo._bar");
+}
+
+#[test]
+fn raw_underscore_literal() {
+    // in raw mode, _ should be literal, not resharp wildcard
+    let (out, _) = run_stdin(&["-R", "a_b"], "a_b\naxb\nabc\n");
+    assert_eq!(out, "1:a_b");
+}
+
+#[test]
+fn raw_ampersand_literal() {
+    let (out, _) = run_stdin(&["-R", "a&b"], "a&b\nabc\n");
+    assert_eq!(out, "1:a&b");
+}
+
+#[test]
+fn raw_tilde_literal() {
+    let (out, _) = run_stdin(&["-R", "a~b"], "a~b\nabc\n");
+    assert_eq!(out, "1:a~b");
+}
+
+#[test]
+fn raw_regex_still_works() {
+    // raw mode should still support standard regex
+    let (out, _) = run_stdin(&["-R", "a.b"], "a_b\naxb\nabc\n");
+    assert_eq!(out, "1:a_b\n2:axb");
+}
+
+#[test]
+fn raw_backslash_preserved() {
+    // \d should still work in raw mode
+    let (out, _) = run_stdin(&["-R", r"\d+_\d+"], "3_4\nabc\n12_34\n");
+    assert_eq!(out, "1:3_4\n3:12_34");
 }

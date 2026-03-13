@@ -1,152 +1,108 @@
 # re#
 
-a grep that can search for multiple words at once, powered by [RE#](https://github.com/ieviev/resharp).
+a recursive search tool like ripgrep, but with boolean constraints - find lines (or paragraphs, or files) matching all of your terms at once. powered by [RE#](https://github.com/ieviev/resharp).
 
 [install](#install) | [web playground](https://ieviev.github.io/resharp-webapp/)
 
 > `re#` is a valid binary name on unix - `#` only starts a comment after whitespace.
 > also included as `resharp` for compatibility.
 
-## Quickstart
+## basic usage
 
 ```sh
-re# 'TODO' src/                       # find 'TODO' in src/
-re# -i 'fixme' .                      # case insensitive
-re# -w 'error' -t rust                # whole word, rust files only
-echo 'hello world' | re# 'hello'      # stdin
+re# 'TODO' src/                       # search like ripgrep
+re# -a error -a timeout src/          # lines with both "error" AND "timeout"
+re# -a error --not debug src/         # "error" but not "debug"
+re# -F 'std::io' -F 'Error' src/     # same, but with literal strings
 ```
 
-### Multi-word search
+## adding constraints
 
-`-W` finds lines containing all given words:
+`-a` (think `add`, `and`) requires each term to appear within the match scope (default: line).
 
-```sh
-re# -W error -W timeout src/          # lines with both "error" AND "timeout"
-re# -W error -W timeout -W retry .    # all three must appear
-```
+| flag | effect |
+|------|--------|
+| `-a` / `--and` | must contain pattern |
+| `-F` / `--fixed-strings` | must contain literal string (no regex) |
+| `-N` / `--not` | must not contain pattern |
 
-`--not` excludes lines matching a pattern:
+`-W` / `--with` is an alias for `-a`.
 
-```sh
-re# -W error --not debug src/         # "error" without "debug"
-re# -W error -W warn --not debug .    # "error" and "warn", but not "debug"
-```
+## controlling scope
 
-### Proximity search
+by default, all constraints must be satisfied within a single line. `--scope` changes this boundary:
 
-`-P N` / `--near N` constrains matches so all terms appear within N lines of each other:
-
-```sh
-re# -P 5 -W unsafe -W unwrap src/    # "unsafe" and "unwrap" within 5 lines
-re# -P 3 -W TODO -W FIXME .          # nearby TODOs and FIXMEs
-re# -P 10 -W fn -W unsafe -t rust    # functions near unsafe blocks
-```
-
-`--near` composes with other flags:
-
-```sh
-re# -P 5 -W unsafe -W unwrap --not allow -t rust   # with --not
-re# -P 5 -W unsafe -W unwrap -c src/               # count matches
-re# -P 5 -W unsafe -W unwrap --json src/            # JSON output
-```
-
-### Paragraph search
-
-`-p` searches paragraphs (blocks separated by blank lines) instead of lines:
+| scope | how to use | constraints must match within |
+|-------|-----------|-------------------------------|
+| line | (default) | a single line |
+| paragraph | `-p` or `--scope paragraph` | text blocks separated by blank lines |
+| file | `--scope file` | anywhere in the same file |
+| custom | `--scope '<pattern>'` | match must not cross the pattern |
 
 ```sh
 re# -p error -p timeout               # paragraphs containing both words
-re# -p error -p timeout -t rust       # only in rust files
-re# -i -p error -p timeout            # case insensitive
+re# --scope file -a serde -a async -l src/  # list files containing both words
+re# --scope='---' -a error -a warn .  # within the same --- delimited block
 ```
 
-### Scoped search
+`-p word` is shorthand for `--scope paragraph -a word`.
 
-`--scope` controls the match boundary. the default is `line`.
+### proximity search
 
-| scope | flag | matches within |
-|-------|------|----------------|
-| line | (default) | single lines |
-| paragraph | `-p` / `--scope paragraph` | blocks separated by blank lines |
-| file | `--scope file` | entire files |
-| custom | `--scope '<regex>'` | any regex constraint |
+`-P N` / `--near N` constrains all terms to appear within N lines of each other:
 
 ```sh
-re# --scope file -W serde -W async -l src/  # files containing both words
-re# --scope '(_*\n){0,3}' -W error -W warn src/  # custom: within 3 lines
+re# -P 5 -a unsafe -a unwrap src/    # "unsafe" and "unwrap" within 5 lines
+re# -P 3 -a TODO -a FIXME .          # nearby TODOs and FIXMEs
 ```
 
-### Pattern operators
+## the RE# pattern language
 
-`&` means AND - both sides must match.
-`~` means NOT - exclude what matches.
-`_` matches any single byte including newline (unlike `.` which stops at `\n`).
+beyond flag-based constraints, you can write patterns directly using operators that standard regex doesn't have:
+
+| operator | meaning | example |
+|----------|---------|---------|
+| `&` | intersection - both sides must match | `(foo)&(bar)` |
+| `~` | complement - exclude what follows | `~(_*debug_*)` |
+| `_` | wildcard - like `.` but also matches newlines | `_*error_*` |
+
+`_` is what makes multi-line and paragraph searches work. use `\_` for a literal underscore, `-R` for standard regex mode, or `-F` for fixed strings.
 
 ```sh
-# hex strings that contain both a digit and a letter
-re# '([0-9a-f]+)&(_*[0-9]_*)&(_*[a-f]_*)'
-
-# identifiers 8-20 chars long containing "config"
-re# '([a-zA-Z_]+)&(_{8,20})&(_*config_*)'
-
-# lines NOT containing "debug"
-re# '~(_*debug_*)' src/
+re# '([0-9a-f]+)&(_*[0-9]_*)&(_*[a-f]_*)'   # hex with both a digit and a letter
+re# '([a-zA-Z_]+)&(_{8,20})&(_*config_*)'    # 8-20 char identifiers with "config"
+re# '^(~(_*debug_*))$' src/                     # lines NOT containing "debug"
 ```
 
 try patterns interactively in the [web playground](https://ieviev.github.io/resharp-webapp/).
 
-### How it works
+## differences from ripgrep
 
-every constraint is just a regex intersection. when you write:
+most ripgrep flags work the same. the differences:
 
-```sh
-re# -P 5 -W unsafe -W unwrap
-```
-
-re# builds the pattern:
-
-```
-(_*unsafe_*) & (_*unwrap_*) & ~((_*\n_*){6})
-```
-
-`-W` terms become intersections (`_*word_*`), `--near 5` rejects spans with 6+ newlines via complement (`~`), and scopes like `-p` or `--scope` add their own boundary constraint. everything composes through the same mechanism, so all features (highlighting, context, `--count`, `--json`, etc.) work uniformly.
-
-### `_` wildcard
-
-in RE#, `_` replaces `.` as the "match anything" character. the difference is `_` also matches newlines, which matters for paragraph search and multi-line patterns.
-
-```sh
-re# 'my_function'              # matches myXfunction, my.function, ...
-re# 'my\_function'             # literal underscore
-re# -R 'my_function'           # -R: standard regex mode (. and _ behave normally)
-re# -F 'my_function'           # -F: fixed string, no regex at all
-```
-
-## Differences from `rg`
-
-| `rg` | `re#` | why |
-|------|-------|-----|
-| `-a` / `--text` | `-uuu` | `-a` is taken by `--and` |
+| ripgrep | re# | reason |
+|---------|-----|--------|
+| `-a` / `--text` | `-uuu` | `-a` is `--and` in re# |
 | `_` is literal | `_` is wildcard | use `-R` or `\_` for literal |
-| pattern is standard regex | pattern has `&`, `~`, `_` operators | use `-R` for standard regex mode |
+| standard regex only | `&`, `~`, `_` operators | use `-R` for standard regex mode |
 
-## Exit codes
+## exit codes
 
-`0` match, `1` no match, `2` error
+`0` match found, `1` no match, `2` error
 
-## Install
+## install
 
-### Cargo
+### cargo
 
 ```sh
-cargo install resharp-grep  # binary is named `resharp`
+cargo install resharp-grep  # installs binary named `resharp`
 ```
 
-### Prebuilt binaries
+### prebuilt binaries
 
 download from [GitHub releases](https://github.com/ieviev/resharp-cli/releases).
 
-### Nix
+### nix
 
 ```sh
 nix profile install github:ieviev/resharp-cli
@@ -160,6 +116,24 @@ inputs.resharp.url = "github:ieviev/resharp-cli";
 
 nix package includes both `resharp` and `re#`, plus shell completions.
 
-## License
+## how it works
+
+every flag-based feature compiles down to a [RE#](https://github.com/ieviev/resharp) pattern. for example:
+
+```sh
+re# -P 5 -a unsafe -a unwrap
+```
+
+builds:
+
+```
+(_*unsafe_*) & (_*unwrap_*) & ~((_*\n_*){6})
+```
+
+`-a` terms become intersections (`_*word_*`), `--near 5` rejects spans with 6+ newlines via complement (`~`), and scopes add their own boundary constraint. because everything compiles to the same representation, all output modes (highlighting, context, `--count`, `--json`, etc.) work uniformly.
+
+see the [RE# engine](https://github.com/ieviev/resharp) for more on the regex algebra.
+
+## license
 
 MIT

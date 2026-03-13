@@ -103,8 +103,10 @@ pub struct Args {
     pub byte_offset: bool,
 
     /// treat pattern as literal string
-    #[arg(short = 'F', long = "fixed-strings")]
-    pub fixed_strings: bool,
+    /// with values: add literal string constraints (repeatable)
+    /// e.g. -F lit1 -F lit2
+    #[arg(short = 'F', long = "fixed-strings", num_args = 0..=1, action = clap::ArgAction::Append, value_name = "STRING")]
+    pub fixed_strings: Option<Vec<String>>,
 
     /// raw regex mode (standard regex, _ is literal, no resharp algebra)
     #[arg(short = 'R', long = "raw")]
@@ -266,6 +268,19 @@ pub struct Args {
 }
 
 impl Args {
+    pub fn is_fixed_strings(&self) -> bool {
+        // bare -F (no values): global fixed-strings mode
+        // -F with values: only the -F terms are literal, not a global flag
+        matches!(&self.fixed_strings, Some(v) if v.is_empty())
+    }
+
+    fn fixed_words(&self) -> &[String] {
+        match &self.fixed_strings {
+            Some(words) => words.as_slice(),
+            None => &[],
+        }
+    }
+
     pub fn is_paragraph_mode(&self) -> bool {
         self.paragraphs.is_some()
     }
@@ -282,7 +297,7 @@ impl Args {
         }
     }
 
-    /// collect all "contains" words from -p and -W
+    /// collect all "contains" words from -p, -W, and -a
     fn contains_words(&self) -> Vec<&str> {
         let para = match &self.paragraphs {
             Some(words) => words.as_slice(),
@@ -290,19 +305,22 @@ impl Args {
         };
         para.iter()
             .chain(self.with.iter())
+            .chain(self.and.iter())
             .map(|s| s.as_str())
             .collect()
     }
 
-    /// resolve the final regex pattern from positional, -e, -f, -W, and -p flags
+    /// resolve the final regex pattern from positional, -e, -f, -W, -F, and -p flags
     pub fn resolve_pattern(&self) -> anyhow::Result<String> {
         let words = self.contains_words();
+        let fixed = self.fixed_words();
+        let total_terms = words.len() + fixed.len();
 
-        if !words.is_empty() {
+        if total_terms > 0 {
             if !self.regexp.is_empty() || !self.pattern_file.is_empty() {
-                anyhow::bail!("-e/-f cannot be combined with -W/-p word patterns");
+                anyhow::bail!("-e/-f cannot be combined with -W/-p/-F word patterns");
             }
-            if self.near.is_some() && words.len() + self.and.len() < 2 {
+            if self.near.is_some() && total_terms + self.and.len() < 2 {
                 anyhow::bail!("--near requires at least 2 terms (use -W, --and, or & in pattern)");
             }
             return Ok(self.build_words_pattern(&words));
@@ -363,7 +381,7 @@ impl Args {
         Ok(combined)
     }
 
-    /// build pattern from -W/-p words: intersect all with _*word_*, apply scope boundary
+    /// build pattern from -W/-p/-F words: intersect all with _*word_*, apply scope boundary
     fn build_words_pattern(&self, words: &[&str]) -> String {
         let mut terms: Vec<String> = words
             .iter()
@@ -373,10 +391,10 @@ impl Args {
             })
             .collect();
 
-        // --and adds more intersection terms
-        for a in &self.and {
-            let term = self.wrap_pattern(a.clone());
-            terms.push(format!("(_*{term}_*)"));
+        // -F adds literal string constraints (pre-escaped)
+        for f in self.fixed_words() {
+            let escaped = Self::escape_resharp(&regex_syntax::escape(f));
+            terms.push(format!("(_*{escaped}_*)"));
         }
 
         let mut combined = terms.join("&");
@@ -438,7 +456,7 @@ impl Args {
             "line" => format!("({combined})&(.*)"),
             "paragraph" => format!("({combined})&((?<=\\A|\n\n)(_*&~(_*\n\n_*)&~(\n_*|_*\n))(?=\n\n|\n\\z|\\z))"),
             "file" | "multiline" => combined,
-            custom => format!("({combined})&({custom})"),
+            custom => format!("({combined})&~(_*{custom}_*)"),
         };
         self.apply_near(scoped)
     }
@@ -451,7 +469,7 @@ impl Args {
     }
 
     fn wrap_pattern(&self, mut pattern: String) -> String {
-        if self.fixed_strings {
+        if self.is_fixed_strings() {
             pattern = regex_syntax::escape(&pattern);
             pattern = Self::escape_resharp(&pattern);
         } else if self.raw {
@@ -596,9 +614,11 @@ impl Args {
 pub fn parse() -> anyhow::Result<Args> {
     let mut args = Args::parse();
 
-    // when -e/-f/-W is used or -p has words, positional PATTERN is a PATH
+    // when -e/-f/-W/-F/-a is used or -p has words, positional PATTERN is a PATH
     let has_words = args.paragraphs.as_ref().map_or(false, |v| !v.is_empty())
-        || !args.with.is_empty();
+        || !args.with.is_empty()
+        || !args.and.is_empty()
+        || args.fixed_strings.as_ref().map_or(false, |v| !v.is_empty());
     if (!args.regexp.is_empty() || !args.pattern_file.is_empty() || has_words)
         && args.pattern.is_some()
     {
