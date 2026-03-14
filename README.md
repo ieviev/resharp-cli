@@ -11,18 +11,18 @@ a recursive search tool like ripgrep, but with boolean constraints - find lines 
 
 ```sh
 re# 'TODO' src/                                  # search like ripgrep
-re# --and error --and timeout src/               # lines with both "error" AND "timeout"
-re# --and error --not debug src/                 # "error" but not "debug"
+re# --add error --add timeout src/               # lines with both "error" AND "timeout"
+re# --add error --not debug src/                 # "error" but not "debug"
 re# --lit 'std::io' --lit 'Error' src/            # same, but with literal strings
 ```
 
 ## adding constraints
 
-`-a` (think `add`, `and`) requires each term to appear within the match scope (default: line).
+`-a` / `--add` requires each term to appear within the match scope (default: line).
 
 | flag | effect |
 |------|--------|
-| `-a` / `--and` | must contain pattern |
+| `-a` / `--add` | must contain pattern |
 | `-F` / `--lit` | must contain literal string (no regex) |
 | `-N` / `--not` | must not contain pattern |
 
@@ -40,19 +40,19 @@ by default, all constraints must be satisfied within a single line. `--scope` ch
 
 ```sh
 re# -p error -p timeout                       # paragraphs containing both words
-re# --scope file --and serde --and async -l src/  # list files containing both words
-re# --scope='---' --and error --and warn .    # within the same --- delimited block
+re# --scope file --add serde --add async -l src/  # list files containing both words
+re# --scope='---' --add error --add warn .    # within the same --- delimited block
 ```
 
-`-p word` is shorthand for `--scope paragraph --and word`.
+`-p word` is shorthand for `--scope paragraph --add word`.
 
 ### proximity search
 
 `--near N` constrains all terms to appear within N lines of each other:
 
 ```sh
-re# --near 5 --and unsafe --and unwrap src/   # "unsafe" and "unwrap" within 5 lines
-re# --near 3 --and TODO --and FIXME .         # nearby TODOs and FIXMEs
+re# --near 5 --add unsafe --add unwrap src/   # "unsafe" and "unwrap" within 5 lines
+re# --near 3 --add TODO --add FIXME .         # nearby TODOs and FIXMEs
 ```
 
 ## the RE# pattern language
@@ -81,7 +81,7 @@ most ripgrep flags work the same. the differences:
 
 | ripgrep | re# | reason |
 |---------|-----|--------|
-| `-a` / `--text` | `-uuu` | `-a` is `--and` in re# |
+| `-a` / `--text` | `-uuu` | `-a` is `--and`/`--add` in re# |
 | `_` is literal | `_` is wildcard | use `-R` or `\_` for literal |
 | standard regex only | `&`, `~`, `_` operators | use `-R` for standard regex mode |
 
@@ -117,24 +117,20 @@ nix package includes both `resharp` and `re#`, plus shell completions.
 
 ## how it works
 
-every flag-based feature compiles down to a [RE#](https://github.com/ieviev/resharp) pattern. for example:
+all flags compile down to [RE#](https://github.com/ieviev/resharp) patterns. for example:
 
 ```sh
-re# --near 5 --and unsafe --and unwrap
+re# --add unsafe --add unwrap --near 5
 ```
 
-builds:
+compiles to:
 
 ```
 (_*unsafe_*) & (_*unwrap_*) & ~((_*\n_*){6})
 ```
 
-`--and` terms become intersections (`_*word_*`), `--near 5` rejects spans with 6+ newlines via complement (`~`), and scopes add their own boundary constraint. because everything compiles to the same representation, all output modes (highlighting, context, `--count`, `--json`, etc.) work uniformly.
+`--add` terms become intersections (`_*word_*`), `--near 5` rejects spans with 6+ newlines via complement (`~`), and scopes add their own boundary constraint. because everything shares the same representation, all output modes (highlighting, context, `--count`, `--json`, etc.) work uniformly.
 
 see the [RE# engine](https://github.com/ieviev/resharp) for more on the regex algebra.
-
-## license
-
-MIT
 
 Have fun!

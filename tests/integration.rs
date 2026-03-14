@@ -755,7 +755,7 @@ fn scope_file() {
     let f2 = td.write("only_serde.rs", "use serde;\nfn bar() {}\n");
     let (out, _) = run_args(&[
         "--scope", "file", "-l", "--no-heading", "--color", "never",
-        "-W", "serde", "-W", "async",
+        "serde", "-a", "async",
         f1.to_str().unwrap(), f2.to_str().unwrap(),
     ]);
     assert!(out.contains("both.rs"));

@@ -6,18 +6,18 @@ use clap::Parser;
 #[derive(Parser, Debug)]
 #[command(
     name = "re#",
-    about = "recursively search files with resharp regex engine",
+    about = "recursive search with boolean constraints, powered by resharp",
     version,
     before_help = "\x1b[1mExamples:\x1b[0m
   re# 'TODO' src/                       search like ripgrep
   re# -i 'error' .                      case insensitive
-  re# -a error -a timeout src/          lines with both words
-  re# -a error --not debug .            \"error\" without \"debug\"
+  re# error -a timeout src/              lines with both words
+  re# error -N debug .                  \"error\" without \"debug\"
   re# -p error -p timeout -t rust       paragraphs with both words
   re# '(_*error_*)&~(_*debug_*)'        regex algebra
-  re# --scope file -a serde -a async -l src/  files with both words
+  re# serde -a async --scope file -l src/  files with both words
   re# --json 'TODO' src/               JSON output for agents
-  re# -P 5 -a unsafe -a unwrap src/    proximity search",
+  re# -P 5 unsafe -a unwrap src/       proximity search",
     after_help = "resharp supports intersection (&), complement (~(...)), and universal wildcard (_).
 see https://github.com/ieviev/resharp for the regex engine."
 )]
@@ -112,11 +112,11 @@ pub struct Args {
     #[arg(short = 'R', long = "raw")]
     pub raw: bool,
 
-    /// add intersection constraint (repeatable)
-    #[arg(short = 'a', long = "and", visible_short_alias = 'W', visible_alias = "with", value_name = "PATTERN")]
+    /// require PATTERN to also appear in match (repeatable)
+    #[arg(short = 'a', long = "and", visible_short_alias = 'W', visible_alias = "with", alias = "add", value_name = "PATTERN")]
     pub and: Vec<String>,
 
-    /// exclude lines/paragraphs containing PATTERN (complement, repeatable)
+    /// exclude matches containing PATTERN (repeatable)
     #[arg(short = 'N', long = "not", value_name = "PATTERN")]
     pub not: Vec<String>,
 
@@ -204,7 +204,7 @@ pub struct Args {
     #[arg(long = "sort", value_name = "CRITERION")]
     pub sort: Option<String>,
 
-    /// match patterns across line boundaries (no boundary constraint)
+    /// allow matches to span multiple lines
     #[arg(long = "multiline")]
     pub multiline: bool,
 
@@ -238,7 +238,7 @@ pub struct Args {
     #[arg(long = "scope", value_name = "SCOPE")]
     pub scope: Option<String>,
 
-    /// find patterns within N lines of each other (use with -W or --and)
+    /// find patterns within N lines of each other (use with --and)
     #[arg(short = 'P', long = "near", value_name = "NUM")]
     pub near: Option<usize>,
 
@@ -258,7 +258,7 @@ pub struct Args {
     #[arg(long = "delimiters", value_name = "PAIR")]
     pub delimiters: Option<String>,
 
-    /// show enclosing scope (function/block signature) for each match
+    /// show the enclosing function or block header for each match
     #[arg(long = "show-scope")]
     pub show_scope: bool,
 }
@@ -293,21 +293,21 @@ impl Args {
         }
     }
 
-    /// collect all "contains" words from -p and -a
-    fn contains_words(&self) -> Vec<&str> {
-        let para = match &self.paragraphs {
-            Some(words) => words.as_slice(),
-            None => &[],
-        };
-        para.iter()
-            .chain(self.and.iter())
-            .map(|s| s.as_str())
-            .collect()
-    }
-
     /// resolve the final regex pattern from positional, -e, -f, -W, -F, and -p flags
     pub fn resolve_pattern(&self) -> anyhow::Result<String> {
-        let words = self.contains_words();
+        let para: Vec<&str> = match &self.paragraphs {
+            Some(w) => w.iter().map(|s| s.as_str()).collect(),
+            None => vec![],
+        };
+        // -a is a modifier when a base pattern exists, standalone otherwise
+        let has_base = self.pattern.is_some()
+            || !self.regexp.is_empty()
+            || !self.pattern_file.is_empty();
+        let words: Vec<&str> = if has_base {
+            para
+        } else {
+            para.into_iter().chain(self.and.iter().map(|s| s.as_str())).collect()
+        };
         let fixed = self.fixed_words();
         let total_terms = words.len() + fixed.len();
 
@@ -315,7 +315,7 @@ impl Args {
             if !self.regexp.is_empty() || !self.pattern_file.is_empty() {
                 anyhow::bail!("-e/-f cannot be combined with -W/-p/-F word patterns");
             }
-            if self.near.is_some() && total_terms + self.and.len() < 2 {
+            if self.near.is_some() && total_terms < 2 {
                 anyhow::bail!("--near requires at least 2 terms (use -W, --and, or & in pattern)");
             }
             return Ok(self.build_words_pattern(&words));
@@ -388,7 +388,7 @@ impl Args {
 
         // -F adds literal string constraints (pre-escaped)
         for f in self.fixed_words() {
-            let escaped = Self::escape_resharp(&regex_syntax::escape(f));
+            let escaped = resharp::escape(f);
             terms.push(format!("(_*{escaped}_*)"));
         }
 
@@ -465,8 +465,7 @@ impl Args {
 
     fn wrap_pattern(&self, mut pattern: String) -> String {
         if self.is_fixed_strings() {
-            pattern = regex_syntax::escape(&pattern);
-            pattern = Self::escape_resharp(&pattern);
+            pattern = resharp::escape(&pattern);
         } else if self.raw {
             pattern = Self::escape_resharp(&pattern);
         }
@@ -609,9 +608,9 @@ impl Args {
 pub fn parse() -> anyhow::Result<Args> {
     let mut args = Args::parse();
 
-    // when -e/-f/-a/-F is used or -p has words, positional PATTERN is a PATH
+    // when -e/-f/-F is used or -p has words, positional PATTERN is a PATH
+    // -a is a modifier, not a pattern source, so it doesn't cause reinterpretation
     let has_words = args.paragraphs.as_ref().map_or(false, |v| !v.is_empty())
-        || !args.and.is_empty()
         || args.fixed_strings.as_ref().map_or(false, |v| !v.is_empty());
     if (!args.regexp.is_empty() || !args.pattern_file.is_empty() || has_words)
         && args.pattern.is_some()

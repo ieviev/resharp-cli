@@ -275,9 +275,9 @@ checksum = "dc897dd8d9e8bd1ed8cdad82b5966c3e0ecae09fb1907d58efaa013543185d0a"
 
 [[package]]
 name = "resharp"
-version = "0.3.0"
+version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "01e2fd781eb3d3f6a769c9dc925a912d378331a5e6baf805acd91e89f1c08070"
+checksum = "7ea51ab5e229b42e2cf1f4a598f61a370178a665ac5ae1ff427b942992b5e29c"
 dependencies = [
  "resharp-algebra",
  "resharp-parser",
@@ -285,16 +285,16 @@ dependencies = [
 
 [[package]]
 name = "resharp-algebra"
-version = "0.3.0"
+version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b816141d8c5e34a410903538886f8653ed4e4ee47c556550ee393d6557039f5d"
+checksum = "9a72b28cd0e0f2047a56243cb03e4b6e73beacbc4f43e1ec30bc4c25d8c5aa3d"
 dependencies = [
- "smallvec",
+ "rustc-hash",
 ]
 
 [[package]]
 name = "resharp-grep"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "bstr",
@@ -303,7 +303,6 @@ dependencies = [
  "ignore",
  "memchr",
  "memmap2",
- "regex-syntax",
  "resharp",
  "serde",
  "serde_json",
@@ -312,13 +311,19 @@ dependencies = [
 
 [[package]]
 name = "resharp-parser"
-version = "0.3.0"
+version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "04cef54446979876f6b1c27464c0e314d414f7446aef43fa47ebefee6c39c989"
+checksum = "362848e2139c848783b39ba2a44c420b5db160e265612a84d58d5e5b415527d3"
 dependencies = [
  "regex-syntax",
  "resharp-algebra",
 ]
+
+[[package]]
+name = "rustc-hash"
+version = "2.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "357703d41365b4b27c590e3ed91eabb1b663f07c4c084095e60cbed4362dff0d"
 
 [[package]]
 name = "same-file"
@@ -371,12 +376,6 @@ dependencies = [
  "serde_core",
  "zmij",
 ]
-
-[[package]]
-name = "smallvec"
-version = "1.15.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "67b1b7a3b5fe4f1376887184045fcf45c69e92af734b7aaddc05fb777b6fbd03"
 
 [[package]]
 name = "strsim"
